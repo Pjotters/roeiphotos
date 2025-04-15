@@ -1,384 +1,368 @@
-import { storage, db } from './firebase';
-import { 
-  ref, 
-  uploadBytes, 
-  getDownloadURL, 
-  listAll, 
-  deleteObject,
-  uploadString,
-  UploadMetadata
-} from 'firebase/storage';
-import { 
-  collection, 
-  addDoc, 
-  getDocs, 
-  query, 
-  where, 
-  serverTimestamp,
-  updateDoc,
-  doc
-} from 'firebase/firestore';
+import { db, rtdb } from './firebase';
+import { ref as rtdbRef, set, get } from 'firebase/database';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 
-// Interface voor foto metadata
-interface PhotoMetadata {
-  id?: string;
+// Interfaces voor foto's en statistieken
+export interface PhotoMetadata {
+  id: string;
   name: string;
-  url: string;
-  thumbnailUrl?: string;
-  path: string;
   size: number;
   contentType: string;
-  eventName?: string;
-  eventDate?: string;
-  isPublic: boolean;
   photographerId: string;
-  createdAt?: any;
-  faceMatches?: number;
+  eventName?: string | null;
+  tags?: string[];
+  isPublic?: boolean;
+  createdAt: any;
+  updatedAt?: any;
+  base64?: string;
 }
 
-// Foto uploaden naar Firebase Storage
+export interface PhotoStatistics {
+  totalPhotos: number;
+  publicPhotos: number;
+  privatePhotos: number;
+  eventPhotos: Record<string, number>;
+}
+
+// Comprimeer afbeelding voordat deze wordt geüpload
+function compressImage(file: File, maxWidth = 800, maxHeight = 800): Promise<string> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Alleen afbeeldingsbestanden zijn toegestaan');
+  }
+
+  // Controleer bestandsgrootte (max 10MB)
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error('Afbeelding is te groot (max 10MB)');
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        // Schaal indien nodig
+        if (width > height) {
+          if (width > maxWidth) {
+            height *= maxWidth / width;
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width *= maxHeight / height;
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL(file.type, 0.7)); // 70% kwaliteit
+      };
+    };
+    reader.onerror = (error) => reject(error);
+  });
+}
+
+// Upload meerdere foto's tegelijk
+export async function uploadMultiplePhotos(
+  files: File[], 
+  photographerId: string, 
+  options: {
+    eventName?: string;
+    tags?: string[];
+    isPublic?: boolean;
+  } = {}
+): Promise<{
+  success: boolean;
+  uploadedPhotos: PhotoMetadata[];
+  errors?: string[];
+}> {
+  const uploadedPhotos: PhotoMetadata[] = [];
+  const errors: string[] = [];
+
+  for (const file of files) {
+    try {
+      const result = await uploadPhoto(file, photographerId, options);
+      if (result.success && result.metadata) {
+        uploadedPhotos.push(result.metadata);
+      } else {
+        errors.push(`Fout bij uploaden: ${result.error}`);
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : 'Onbekende fout');
+    }
+  }
+
+  return {
+    success: errors.length === 0,
+    uploadedPhotos,
+    errors
+  };
+}
+
+// Upload individuele foto
 export async function uploadPhoto(
   file: File, 
   photographerId: string, 
-  eventInfo?: { name?: string; date?: string },
-  isPublic: boolean = true
+  options: {
+    eventName?: string;
+    tags?: string[];
+    isPublic?: boolean;
+  } = {}
 ) {
   try {
-    // Genereer een unieke bestandsnaam
-    const filename = `${uuidv4()}-${file.name.replace(/\s+/g, '_')}`;
-    const folderPath = `photos/${photographerId}`;
-    const fullPath = `${folderPath}/${filename}`;
+    // Comprimeer afbeelding
+    const compressedImage = await compressImage(file);
     
-    // Maak een reference naar de storage locatie
-    const storageRef = ref(storage, fullPath);
+    // Genereer unieke ID
+    const photoId = uuidv4();
     
-    // Metadata voor het bestand
-    const metadata: UploadMetadata = {
-      contentType: file.type,
-      customMetadata: {
-        uploadedBy: photographerId,
-        originalName: file.name,
-        eventName: eventInfo?.name || '',
-        eventDate: eventInfo?.date || '',
-      }
-    };
-    
-    // Upload het bestand
-    const uploadResult = await uploadBytes(storageRef, file, metadata);
-    
-    // Haal de download URL op
-    const downloadURL = await getDownloadURL(uploadResult.ref);
-    
-    // Sla de foto metadata op in Firestore
-    const photoData: PhotoMetadata = {
+    // Metadata voor Firestore
+    const photoMetadata: PhotoMetadata = {
+      id: photoId,
       name: file.name,
-      url: downloadURL,
-      path: fullPath,
       size: file.size,
       contentType: file.type,
-      eventName: eventInfo?.name,
-      eventDate: eventInfo?.date,
-      isPublic,
       photographerId,
+      eventName: options.eventName || null,
+      tags: options.tags || [],
+      isPublic: options.isPublic ?? false,
       createdAt: serverTimestamp(),
-      faceMatches: 0
+      updatedAt: serverTimestamp()
     };
     
-    const photoRef = await addDoc(collection(db, 'photos'), photoData);
+    // Sla metadata op in Firestore
+    await addDoc(collection(db, 'photos'), photoMetadata);
     
-    return {
-      success: true,
-      photoId: photoRef.id,
-      url: downloadURL,
-      path: fullPath,
-      error: null
-    };
-  } catch (error: any) {
-    console.error('Upload error:', error);
-    return {
-      success: false,
-      photoId: null,
-      url: null,
-      path: null,
-      error: error.message
-    };
-  }
-}
-
-// Meerdere foto's uploaden
-export async function uploadMultiplePhotos(
-  files: File[],
-  photographerId: string,
-  eventInfo?: { name?: string; date?: string },
-  isPublic: boolean = true
-) {
-  const uploadPromises = Array.from(files).map(file => 
-    uploadPhoto(file, photographerId, eventInfo, isPublic)
-  );
-  return Promise.all(uploadPromises);
-}
-
-// Genereer een thumbnail voor een foto
-export async function generateThumbnail(
-  imageUrl: string,
-  photoId: string,
-  photographerId: string
-): Promise<{ success: boolean; thumbnailUrl?: string; error?: string }> {
-  try {
-    // Maak een canvas element om de thumbnail te genereren
-    const img = new Image();
-    
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-      img.src = imageUrl;
-    });
-    
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
-    if (!ctx) {
-      throw new Error('Kan geen canvas context maken');
-    }
-    
-    // Bereken nieuwe dimensies met behoud van aspect ratio
-    const MAX_WIDTH = 300;
-    const MAX_HEIGHT = 300;
-    
-    let width = img.width;
-    let height = img.height;
-    
-    if (width > height) {
-      if (width > MAX_WIDTH) {
-        height *= MAX_WIDTH / width;
-        width = MAX_WIDTH;
-      }
-    } else {
-      if (height > MAX_HEIGHT) {
-        width *= MAX_HEIGHT / height;
-        height = MAX_HEIGHT;
-      }
-    }
-    
-    canvas.width = width;
-    canvas.height = height;
-    
-    // Teken de verkleinde afbeelding op het canvas
-    ctx.drawImage(img, 0, 0, width, height);
-    
-    // Converteer canvas naar dataURL
-    const thumbnailDataUrl = canvas.toDataURL('image/jpeg', 0.7);
-    
-    // Upload de thumbnail naar Firebase Storage
-    const thumbnailPath = `thumbnails/${photographerId}/${photoId}.jpg`;
-    const storageRef = ref(storage, thumbnailPath);
-    
-    // Upload de thumbnail van dataURL formaat
-    await uploadString(storageRef, thumbnailDataUrl, 'data_url');
-    
-    // Haal de download URL op
-    const thumbnailUrl = await getDownloadURL(storageRef);
-    
-    // Update het foto document met de thumbnail URL
-    await updateDoc(doc(db, 'photos', photoId), {
-      thumbnailUrl: thumbnailUrl
+    // Sla foto Base64 op in Realtime Database
+    const rtdbPhotoRef = rtdbRef(rtdb, `photos/${photographerId}/${photoId}`);
+    await set(rtdbPhotoRef, {
+      base64: compressedImage,
+      metadata: photoMetadata
     });
     
     return {
       success: true,
-      thumbnailUrl
+      photoId: photoId,
+      metadata: photoMetadata
     };
-  } catch (error: any) {
-    console.error('Thumbnail generation error:', error);
+  } catch (error) {
+    console.error('Fout bij uploaden foto:', error);
     return {
       success: false,
-      error: error.message
+      error: error instanceof Error ? error.message : 'Onbekende fout'
     };
   }
 }
 
-// Foto's ophalen voor een fotograaf of evenement
-export async function getPhotos(photographerId: string, limit?: number) {
-  // Overload functie om ook oude implementatie te ondersteunen
-  if (typeof photographerId === 'object') {
-    return getPhotosByFilters(photographerId);
-  }
-  
+// Foto's ophalen voor een specifieke fotograaf
+export async function getPhotosByPhotographer(photographerId: string, options: {
+  limit?: number;
+  eventName?: string;
+  tags?: string[];
+} = {}): Promise<PhotoMetadata[]> {
   try {
-    // Bouw de query op basis van de filters
-    let photoQuery = collection(db, 'photos');
-    let q = query(photoQuery, where('photographerId', '==', photographerId));
+    const { limit = 50, eventName, tags } = options;
     
-    const querySnapshot = await getDocs(q);
-    const photos: any[] = [];
+    // Query voor Firestore
+    let baseQuery = query(collection(db, 'photos'), 
+      where('photographerId', '==', photographerId),
+      orderBy('createdAt', 'desc'),
+      limit(limit)
+    );
     
-    querySnapshot.forEach((doc) => {
-      photos.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
+    // Optionele filters
+    if (eventName) {
+      baseQuery = query(baseQuery, where('eventName', '==', eventName));
+    }
     
-    // Sorteer op createdAt en beperk tot limit als die is opgegeven
-    const sortedPhotos = photos.sort((a, b) => {
-      const dateA = a.createdAt?.seconds || 0;
-      const dateB = b.createdAt?.seconds || 0;
-      return dateB - dateA; // Nieuwste eerst
-    }).slice(0, limit || photos.length);
+    if (tags && tags.length > 0) {
+      baseQuery = query(baseQuery, where('tags', 'array-contains-any', tags));
+    }
     
-    return sortedPhotos;
-  } catch (error: any) {
-    console.error('Get photos error:', error);
+    const photoSnapshot = await getDocs(baseQuery);
+    const photos: PhotoMetadata[] = photoSnapshot.docs.map(doc => ({
+      ...doc.data(),
+      id: doc.id
+    } as PhotoMetadata));
+    
+    // Haal Base64 data op uit Realtime Database
+    const photosWithData = await Promise.all(photos.map(async (photo) => {
+      const photoRef = rtdbRef(rtdb, `photos/${photographerId}/${photo.id}`);
+      const snapshot = await get(photoRef);
+      return {
+        ...photo,
+        base64: snapshot.val()?.base64 || null
+      };
+    }));
+    
+    return photosWithData;
+  } catch (error) {
+    console.error('Fout bij ophalen foto\'s:', error);
     return [];
   }
 }
 
-// Originele implementatie als private functie
-async function getPhotosByFilters(filters: {
+// Zoek foto's op basis van filters
+export async function searchPhotos(filters: {
   photographerId?: string;
   eventName?: string;
+  tags?: string[];
   isPublic?: boolean;
-}) {
+  startDate?: Date;
+  endDate?: Date;
+  limit?: number;
+} = {}): Promise<PhotoMetadata[]> {
   try {
-    // Bouw de query op basis van de filters
-    let photoQuery = collection(db, 'photos');
-    let constraints = [];
-    
-    if (filters.photographerId) {
-      constraints.push(where('photographerId', '==', filters.photographerId));
+    const { 
+      photographerId, 
+      eventName, 
+      tags, 
+      isPublic, 
+      startDate, 
+      endDate, 
+      limit = 50 
+    } = filters;
+
+    let baseQuery = query(
+      collection(db, 'photos'),
+      orderBy('createdAt', 'desc'),
+      limit(limit)
+    );
+
+    // Voeg filters toe
+    if (photographerId) {
+      baseQuery = query(baseQuery, where('photographerId', '==', photographerId));
     }
-    
-    if (filters.eventName) {
-      constraints.push(where('eventName', '==', filters.eventName));
+
+    if (eventName) {
+      baseQuery = query(baseQuery, where('eventName', '==', eventName));
     }
-    
-    if (filters.isPublic !== undefined) {
-      constraints.push(where('isPublic', '==', filters.isPublic));
+
+    if (tags && tags.length > 0) {
+      baseQuery = query(baseQuery, where('tags', 'array-contains-any', tags));
     }
-    
-    const q = constraints.length > 0 ? query(photoQuery, ...constraints) : photoQuery;
-    
-    const querySnapshot = await getDocs(q);
-    const photos: any[] = [];
-    
-    querySnapshot.forEach((doc) => {
-      photos.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-    
-    return {
-      success: true,
-      photos,
-      error: null
-    };
-  } catch (error: any) {
-    console.error('Get photos error:', error);
-    return {
-      success: false,
-      photos: [],
-      error: error.message
-    };
+
+    if (isPublic !== undefined) {
+      baseQuery = query(baseQuery, where('isPublic', '==', isPublic));
+    }
+
+    if (startDate) {
+      baseQuery = query(baseQuery, where('createdAt', '>=', startDate));
+    }
+
+    if (endDate) {
+      baseQuery = query(baseQuery, where('createdAt', '<=', endDate));
+    }
+
+    const photoSnapshot = await getDocs(baseQuery);
+    const photos: PhotoMetadata[] = photoSnapshot.docs.map(doc => ({
+      ...doc.data(),
+      id: doc.id
+    } as PhotoMetadata));
+
+    return photos;
+  } catch (error) {
+    console.error('Fout bij zoeken foto\'s:', error);
+    return [];
   }
 }
 
-// Foto verwijderen
-export async function deletePhoto(photoId: string, path: string) {
+// Foto verwijderen (soft delete)
+export async function deletePhoto(photoId: string, photographerId: string) {
   try {
-    // Controleer eerst of het bestand bestaat in Storage
-    const storageRef = ref(storage, path);
+    // Verwijder foto uit Realtime Database
+    const rtdbPhotoRef = rtdbRef(rtdb, `photos/${photographerId}/${photoId}`);
+    await set(rtdbPhotoRef, null);
     
-    // Verwijder bestand uit Storage
-    await deleteObject(storageRef);
-    
-    // Verwijder metadata uit Firestore
-    await updateDoc(doc(db, 'photos', photoId), {
-      deleted: true,
+    // Markeer foto als verwijderd in Firestore
+    const photoRef = doc(db, 'photos', photoId);
+    await updateDoc(photoRef, {
+      isDeleted: true,
       deletedAt: serverTimestamp()
     });
     
-    return {
-      success: true,
-      error: null
-    };
-  } catch (error: any) {
-    console.error('Delete photo error:', error);
-    return {
-      success: false,
-      error: error.message
+    return { success: true };
+  } catch (error) {
+    console.error('Fout bij verwijderen foto:', error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Onbekende fout' 
     };
   }
 }
 
-// Statistieken voor foto's van een fotograaf ophalen
-export async function getPhotoStatistics(photographerId: string) {
+// Foto statistieken ophalen
+export async function getPhotoStatistics(photographerId: string): Promise<PhotoStatistics> {
   try {
-    // Haal alle foto's op voor deze fotograaf
-    const photosQuery = query(
+    const baseQuery = query(
       collection(db, 'photos'),
       where('photographerId', '==', photographerId)
     );
     
-    const querySnapshot = await getDocs(photosQuery);
-    let totalPhotos = 0;
-    let totalDownloads = 0;
-    let facesDetected = 0;
-    let publicPhotos = 0;
-    let privatePhotos = 0;
+    const photoSnapshot = await getDocs(baseQuery);
+    const photos = photoSnapshot.docs.map(doc => doc.data());
     
-    querySnapshot.forEach((doc) => {
-      totalPhotos++;
-      const photoData = doc.data();
-      
-      // Tel downloads (indien beschikbaar)
-      totalDownloads += photoData.downloadCount || 0;
-      
-      // Tel gezichten indien beschikbaar
-      facesDetected += photoData.facesDetected || 0;
-      
-      // Tel publieke/private foto's
-      if (photoData.isPublic) {
-        publicPhotos++;
-      } else {
-        privatePhotos++;
-      }
-    });
-    
-    // Haal faceMatches op voor deze fotograaf om te zien hoeveel roeiers er zijn gedetecteerd
-    const matchesQuery = query(
-      collection(db, 'face_matches'),
-      where('photographerId', '==', photographerId)
-    );
-    
-    const matchesSnapshot = await getDocs(matchesQuery);
-    let uniqueRowers = new Set();
-    
-    matchesSnapshot.forEach((doc) => {
-      const matchData = doc.data();
-      if (matchData.rowerId) {
-        uniqueRowers.add(matchData.rowerId);
-      }
-    });
-    
-    return {
-      totalPhotos,
-      totalDownloads,
-      facesDetected,
-      publicPhotos,
-      privatePhotos,
-      uniqueRowersCount: uniqueRowers.size
+    const statistics: PhotoStatistics = {
+      totalPhotos: photos.length,
+      publicPhotos: photos.filter(p => p.isPublic).length,
+      privatePhotos: photos.filter(p => !p.isPublic).length,
+      eventPhotos: photos.reduce((acc, photo) => {
+        if (photo.eventName) {
+          acc[photo.eventName] = (acc[photo.eventName] || 0) + 1;
+        }
+        return acc;
+      }, {} as Record<string, number>)
     };
-  } catch (error: any) {
-    console.error('Get photo statistics error:', error);
+    
+    return statistics;
+  } catch (error) {
+    console.error('Fout bij ophalen foto statistieken:', error);
     return {
       totalPhotos: 0,
-      totalDownloads: 0,
-      facesDetected: 0,
       publicPhotos: 0,
       privatePhotos: 0,
-      uniqueRowersCount: 0
+      eventPhotos: {}
     };
   }
 }
+
+// Database Rules voor Realtime Database
+// Zet deze in firebase.rules.json
+/*
+{
+  "rules": {
+    "photos": {
+      "$photographerId": {
+        "$photoId": {
+          ".read": "auth != null && auth.uid == $photographerId",
+          ".write": "auth != null && auth.uid == $photographerId"
+        }
+      }
+    }
+  }
+}
+*/
+
+// Database Rules voor Firestore
+// Zet deze in firestore.rules
+/*
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /photos/{photoId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.photographerId;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && request.auth.uid == resource.data.photographerId;
+    }
+  }
+}
+*/
