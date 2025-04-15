@@ -6,6 +6,13 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/FirebaseAuthProvider';
 import { getPhotos, getPhotoStatistics } from '@/lib/storage-firebase';
+// Importeer de juiste interface voor face matches params
+interface FaceMatchParams {
+  photoId?: string;
+  rowerId?: string;
+  photographerId?: string;
+  approved?: boolean;
+}
 import { getFaceMatches } from '@/lib/face-recognition-firebase';
 
 type UserRole = 'ROWER' | 'PHOTOGRAPHER' | 'ADMIN';
@@ -34,13 +41,36 @@ export default function Dashboard() {
         if (userData.role === 'PHOTOGRAPHER') {
           // Haal fotografendata op
           const stats = await getPhotoStatistics(user?.uid || '');
-          const recentPhotos = await getPhotos(user?.uid || '', 5);
+          const photosResult = await getPhotos(user?.uid || '', 5);
           setPhotoStats(stats);
-          setPhotos(recentPhotos);
+          
+          // Zorg voor correcte afhandeling van het resultaat van getPhotos
+          if (Array.isArray(photosResult)) {
+            // Direct array behandelen (nieuwe implementatie)
+            setPhotos(photosResult);
+          } else if (photosResult.success && Array.isArray(photosResult.photos)) {
+            // Object met success en photos velden (oude implementatie)
+            setPhotos(photosResult.photos);
+          } else {
+            // Fallback naar lege array
+            setPhotos([]);
+          }
         } else if (userData.role === 'ROWER') {
           // Haal roeiersdata op
-          const matches = await getFaceMatches(user?.uid || '');
-          setFaceMatches(matches);
+          try {
+            const params: FaceMatchParams = {
+              rowerId: user?.uid || ''
+            };
+            const matchesResult = await getFaceMatches(params);
+            if (matchesResult && matchesResult.success) {
+              setFaceMatches(matchesResult.matches || []);
+            } else {
+              setFaceMatches([]);
+            }
+          } catch (matchError) {
+            console.error('Error fetching face matches:', matchError);
+            setFaceMatches([]);
+          }
         }
         setLoading(false);
       } catch (error) {
@@ -88,11 +118,13 @@ export default function Dashboard() {
         </div>
 
         {/* Dashboard inhoud op basis van rol */}
-        {userRole === 'ROWER' ? (
-          <RowerDashboard />
-        ) : userRole === 'PHOTOGRAPHER' ? (
-          <PhotographerDashboard />
-        ) : (
+        {userData.role === 'ROWER' && (
+          <RowerDashboard faceMatches={faceMatches} userId={user?.uid || ''} />
+        )}
+        {userData.role === 'PHOTOGRAPHER' && (
+          <PhotographerDashboard photos={photos} stats={photoStats} userId={user?.uid || ''} />
+        )}
+        {userData.role === 'ADMIN' && (
           <AdminDashboard />
         )}
       </div>

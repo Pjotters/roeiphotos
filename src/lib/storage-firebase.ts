@@ -311,3 +311,74 @@ export async function deletePhoto(photoId: string, path: string) {
     };
   }
 }
+
+// Statistieken voor foto's van een fotograaf ophalen
+export async function getPhotoStatistics(photographerId: string) {
+  try {
+    // Haal alle foto's op voor deze fotograaf
+    const photosQuery = query(
+      collection(db, 'photos'),
+      where('photographerId', '==', photographerId)
+    );
+    
+    const querySnapshot = await getDocs(photosQuery);
+    let totalPhotos = 0;
+    let totalDownloads = 0;
+    let facesDetected = 0;
+    let publicPhotos = 0;
+    let privatePhotos = 0;
+    
+    querySnapshot.forEach((doc) => {
+      totalPhotos++;
+      const photoData = doc.data();
+      
+      // Tel downloads (indien beschikbaar)
+      totalDownloads += photoData.downloadCount || 0;
+      
+      // Tel gezichten indien beschikbaar
+      facesDetected += photoData.facesDetected || 0;
+      
+      // Tel publieke/private foto's
+      if (photoData.isPublic) {
+        publicPhotos++;
+      } else {
+        privatePhotos++;
+      }
+    });
+    
+    // Haal faceMatches op voor deze fotograaf om te zien hoeveel roeiers er zijn gedetecteerd
+    const matchesQuery = query(
+      collection(db, 'face_matches'),
+      where('photographerId', '==', photographerId)
+    );
+    
+    const matchesSnapshot = await getDocs(matchesQuery);
+    let uniqueRowers = new Set();
+    
+    matchesSnapshot.forEach((doc) => {
+      const matchData = doc.data();
+      if (matchData.rowerId) {
+        uniqueRowers.add(matchData.rowerId);
+      }
+    });
+    
+    return {
+      totalPhotos,
+      totalDownloads,
+      facesDetected,
+      publicPhotos,
+      privatePhotos,
+      uniqueRowersCount: uniqueRowers.size
+    };
+  } catch (error: any) {
+    console.error('Get photo statistics error:', error);
+    return {
+      totalPhotos: 0,
+      totalDownloads: 0,
+      facesDetected: 0,
+      publicPhotos: 0,
+      privatePhotos: 0,
+      uniqueRowersCount: 0
+    };
+  }
+}

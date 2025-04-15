@@ -3,7 +3,10 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { useAuth } from '@/components/FirebaseAuthProvider';
 
 // Type voor een foto-item
 interface Photo {
@@ -25,33 +28,66 @@ export default function PhotosPage() {
   const [showFilters, setShowFilters] = useState(false);
 
   // Dit is een tijdelijke simulatie van het ophalen van foto's
-  useEffect(() => {
-    // Simuleer API-call om foto's op te halen
-    setTimeout(() => {
-      // Dummy data voor foto's
-      const dummyPhotos: Photo[] = Array.from({ length: 20 }, (_, i) => ({
-        id: `photo-${i + 1}`,
-        url: `/api/photos/placeholder-${(i % 5) + 1}`,
-        thumbnailUrl: `/api/photos/placeholder-${(i % 5) + 1}`,
-        eventName: ['Hollandia Roeiwedstrijden', 'NSRF Slotwedstrijden', 'Heineken Roeivierkamp'][i % 3],
-        eventDate: ['12 apr 2025', '5 apr 2025', '25 mrt 2025'][i % 3],
-        photographerName: ['Jan Jansen', 'Piet Fotograaf', 'Anne Kiekjes'][i % 3],
-        isMatch: i % 3 === 0 // Elke derde foto is een match voor demo doeleinden
-      }));
+  // Gebruik Firebase auth state
+  const { user, userData } = useAuth();
+  const router = useRouter();
 
-      // Als er een eventFilter is, filter de foto's
+  // Functie om foto's uit Firebase op te halen
+  const fetchPhotosFromFirebase = async () => {
+    setLoading(true);
+    try {
+      // Bouw de query op
+      let photosQuery = collection(db, 'photos');
+      let constraints = [];
+      
+      // Als er een evenement filter is
       if (eventFilter) {
-        const filtered = dummyPhotos.filter(photo => 
-          photo.eventName.toLowerCase().includes(eventFilter.toLowerCase())
-        );
-        setPhotos(filtered);
-      } else {
-        setPhotos(dummyPhotos);
+        constraints.push(where('eventName', '==', eventFilter));
       }
       
+      // Alleen publieke foto's of foto's waar de gebruiker toegang toe heeft
+      if (!userData?.role || userData.role !== 'PHOTOGRAPHER') {
+        constraints.push(where('isPublic', '==', true));
+      }
+      
+      // Sorteer op datum, nieuwste eerst
+      constraints.push(orderBy('createdAt', 'desc'));
+      
+      // Beperk tot 100 foto's voor betere performance
+      constraints.push(limit(100));
+      
+      // Voer de query uit
+      const q = query(photosQuery, ...constraints);
+      const querySnapshot = await getDocs(q);
+      
+      // Verwerk de resultaten
+      const loadedPhotos: Photo[] = [];
+      
+      querySnapshot.forEach((doc) => {
+        const photoData = doc.data();
+        loadedPhotos.push({
+          id: doc.id,
+          url: photoData.url || '',
+          thumbnailUrl: photoData.thumbnailUrl || photoData.url || '',
+          eventName: photoData.eventName || 'Onbekend evenement',
+          eventDate: photoData.eventDate ? new Date(photoData.eventDate.seconds * 1000).toLocaleDateString('nl-NL') : 'Onbekende datum',
+          photographerName: photoData.photographerName || 'Onbekend',
+          isMatch: photoData.matches?.includes(user?.uid) || false
+        });
+      });
+      
+      setPhotos(loadedPhotos);
+    } catch (error) {
+      console.error('Error fetching photos:', error);
+    } finally {
       setLoading(false);
-    }, 1000);
-  }, [eventFilter]);
+    }
+  };
+  
+  // Haal foto's op wanneer de component mount of filters veranderen
+  useEffect(() => {
+    fetchPhotosFromFirebase();
+  }, [eventFilter, user, userData]);
 
   // Filter foto's op basis van de actieve filter
   const filteredPhotos = activeFilter === 'matches' 
