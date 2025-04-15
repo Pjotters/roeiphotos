@@ -1,0 +1,90 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Auth Users - Basic user information
+model User {
+  id            String       @id @default(uuid())
+  email         String       @unique
+  password      String
+  name          String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  role          UserRole     @default(ROWER)
+  rower         Rower?       // One-to-one relation with Rower
+  photographer  Photographer? // One-to-one relation with Photographer
+}
+
+enum UserRole {
+  ROWER
+  PHOTOGRAPHER
+  ADMIN
+}
+
+// Rowers (Customers)
+model Rower {
+  id            String       @id @default(uuid())
+  userId        String       @unique
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio           String?
+  teamName      String?
+  faceData      String?      // JSON data for face recognition
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  faceMatches   FaceMatch[]  // One-to-many relation with FaceMatch
+}
+
+// Photographers
+model Photographer {
+  id            String       @id @default(uuid())
+  userId        String       @unique
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio           String?
+  website       String?
+  instagram     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  photos        Photo[]      // One-to-many relation with Photo
+}
+
+// Photos
+model Photo {
+  id            String       @id @default(uuid())
+  photographerId String      
+  photographer  Photographer @relation(fields: [photographerId], references: [id], onDelete: Cascade)
+  url           String
+  thumbnail     String?
+  eventName     String?
+  eventDate     DateTime?
+  takenAt       DateTime?
+  metadata      Json?
+  isPublic      Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  faceMatches   FaceMatch[]  // One-to-many relation with FaceMatch
+}
+
+// Face Matches (for facial recognition)
+model FaceMatch {
+  id            String       @id @default(uuid())
+  photoId       String
+  photo         Photo        @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  rowerId       String
+  rower         Rower        @relation(fields: [rowerId], references: [id], onDelete: Cascade)
+  confidence    Float        // Confidence score of the match
+  approved      Boolean      @default(false) // Whether the rower has approved this match
+  coordinates   Json?        // Face location in the photo
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
