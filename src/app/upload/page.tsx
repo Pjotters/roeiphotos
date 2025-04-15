@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import PhotoUploader from '@/components/PhotoUploader';
+import PhotoUploaderFirebase from '@/components/PhotoUploaderFirebase';
 
 export default function UploadPage() {
   const router = useRouter();
@@ -91,11 +91,15 @@ export default function UploadPage() {
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Foto's uploaden</h3>
-              <PhotoUploader 
-                folderPath={`events/${eventDate?.replace(/-/g, '') || 'algemeen'}`}
+              <PhotoUploaderFirebase 
+                eventInfo={{
+                  name: eventName,
+                  date: eventDate
+                }}
                 onUploadComplete={handleUploadComplete}
                 onUploadError={handleUploadError}
                 maxFiles={20}
+                isPublic={isPublic}
               />
               
               {uploadSuccess && (

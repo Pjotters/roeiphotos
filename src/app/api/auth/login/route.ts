@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { compare } from 'bcrypt';
-import { PrismaClient } from '@prisma/client';
-import { sign } from 'jsonwebtoken';
 import { z } from 'zod';
+import { loginUser } from '@/lib/auth-firebase';
 
-const prisma = new PrismaClient();
+// Geen Prisma client nodig met Firebase
 
 // Validatieschema voor login
 const loginSchema = z.object({
@@ -31,85 +29,32 @@ export async function POST(req: NextRequest) {
     
     const { email, password } = validationResult.data;
 
-    // Zoek gebruiker op basis van e-mail
-    const user = await prisma.user.findUnique({
-      where: {
-        email,
-      },
-      include: {
-        rower: true,
-        photographer: true,
-      },
-    });
+    // Inloggen met Firebase
+    const result = await loginUser(email, password);
 
-    // Controleer of gebruiker bestaat
-    if (!user) {
+    // Controleer of inloggen gelukt is
+    if (!result.success) {
       return NextResponse.json(
         { 
           success: false, 
-          message: "Ongeldige inloggegevens" 
+          message: result.error || "Ongeldige inloggegevens" 
         }, 
         { status: 401 }
       );
     }
 
-    // Controleer wachtwoord
-    const passwordValid = await compare(password, user.password);
-    
-    if (!passwordValid) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          message: "Ongeldige inloggegevens" 
-        }, 
-        { status: 401 }
-      );
-    }
-
-    // Genereer JWT token
-    // Normaal zou je hiervoor een echte geheime sleutel uit je environment variables halen
-    const token = sign(
-      {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-      },
-      process.env.JWT_SECRET || 'geheim_voor_development',
-      { expiresIn: '7d' }
-    );
-
-    // Bepaal profielgegevens op basis van rol
-    let profileData = null;
-    if (user.role === 'ROWER' && user.rower) {
-      profileData = {
-        teamName: user.rower.teamName,
-        hasFaceData: !!user.rower.faceData,
-      };
-    } else if (user.role === 'PHOTOGRAPHER' && user.photographer) {
-      profileData = {
-        website: user.photographer.website,
-        instagram: user.photographer.instagram,
-      };
-    }
-
-    // Gebruikersgegevens terugsturen (zonder wachtwoord)
+    // Gebruikersgegevens en token terugsturen
     return NextResponse.json({
       success: true,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        profile: profileData,
-      },
-      token,
+      user: result.user,
+      token: result.token
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Login error:", error);
     return NextResponse.json(
       { 
         success: false, 
-        message: "Er is een fout opgetreden bij het inloggen" 
+        message: error.message || "Er is een fout opgetreden bij het inloggen" 
       }, 
       { status: 500 }
     );

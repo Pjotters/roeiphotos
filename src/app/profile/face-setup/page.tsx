@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import * as faceapi from 'face-api.js';
+import { processImageForFaceDetection } from '@/lib/faceRecognition';
 
 export default function FaceSetupPage() {
   const router = useRouter();
@@ -10,12 +12,42 @@ export default function FaceSetupPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [capturedPhotos, setCapturedPhotos] = useState<string[]>([]);
+  const [faceDetectionResults, setFaceDetectionResults] = useState<any[]>([]);
   const [processing, setProcessing] = useState(false);
   const [step, setStep] = useState<'intro' | 'capture' | 'processing' | 'complete'>('intro');
   const [error, setError] = useState('');
+  const [modelLoaded, setModelLoaded] = useState(false);
+
+  // Laad face-api modellen
+  useEffect(() => {
+    const loadFaceApiModels = async () => {
+      try {
+        const MODEL_URL = '/models';
+        await Promise.all([
+          faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+          faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+        ]);
+        
+        setModelLoaded(true);
+        console.log('Face-api modellen succesvol geladen');
+      } catch (error) {
+        console.error('Fout bij het laden van face-api modellen:', error);
+        setError('Gezichtsherkenningsmodellen konden niet worden geladen. Probeer de pagina te verversen.');
+      }
+    };
+
+    loadFaceApiModels();
+  }, []);
 
   // Start camera stream
   const startCamera = async () => {
+    if (!modelLoaded) {
+      setError('Wacht tot de gezichtsherkenningsmodellen zijn geladen');
+      return;
+    }
+    
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
@@ -52,8 +84,8 @@ export default function FaceSetupPage() {
     }
   };
 
-  // Capture photo from video stream
-  const capturePhoto = () => {
+  // Capture photo from video stream and detect face
+  const capturePhoto = async () => {
     if (canvasRef.current && videoRef.current) {
       const context = canvasRef.current.getContext('2d');
       
@@ -64,14 +96,29 @@ export default function FaceSetupPage() {
         context.drawImage(videoRef.current, 0, 0, videoRef.current.videoWidth, videoRef.current.videoHeight);
         
         const photoData = canvasRef.current.toDataURL('image/png');
-        setCapturedPhotos(prev => [...prev, photoData]);
+        
+        try {
+          // Detecteer gezicht in de foto
+          const result = await processImageForFaceDetection(photoData);
+          
+          if (result && result.descriptor) {
+            // Als er een gezicht is gedetecteerd, sla zowel de foto als het resultaat op
+            setCapturedPhotos(prev => [...prev, photoData]);
+            setFaceDetectionResults(prev => [...prev, result]);
+          } else {
+            setError('Geen gezicht gedetecteerd. Zorg dat je gezicht goed zichtbaar is en probeer opnieuw.');
+          }
+        } catch (error) {
+          console.error('Fout bij gezichtsdetectie:', error);
+          setError('Fout bij het detecteren van een gezicht. Probeer opnieuw.');
+        }
       }
     }
   };
 
   // Process captured photos for face recognition
   const processPhotos = async () => {
-    if (capturedPhotos.length < 3) {
+    if (capturedPhotos.length < 3 || faceDetectionResults.length < 3) {
       setError('Maak minstens 3 foto\'s om de gezichtsherkenning te optimaliseren.');
       return;
     }
@@ -81,15 +128,28 @@ export default function FaceSetupPage() {
     setProcessing(true);
 
     try {
-      // Simuleer verwerking van gezichtsherkenning
-      // In een echte app zou je hier face-api.js gebruiken om gezichtskenmerken te extraheren
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      // Simuleer succesvolle verwerking
-      setStep('complete');
-    } catch (err) {
+      // Verstuur de gezichtsdata naar de server
+      const response = await fetch('/api/face/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Hier zou je een auth token moeten meesturen in een echte applicatie
+        },
+        body: JSON.stringify({
+          faceData: faceDetectionResults
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setStep('complete');
+      } else {
+        throw new Error(data.message || 'Onbekende fout bij het registreren van je gezicht');
+      }
+    } catch (err: any) {
       console.error('Fout bij het verwerken van gezichtsdata:', err);
-      setError('Er is een fout opgetreden bij het verwerken van je gezichtsdata. Probeer het opnieuw.');
+      setError(err.message || 'Er is een fout opgetreden bij het verwerken van je gezichtsdata. Probeer het opnieuw.');
       setStep('capture');
     } finally {
       setProcessing(false);

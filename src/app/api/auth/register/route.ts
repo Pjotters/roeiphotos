@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { hash } from 'bcrypt';
-import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
-
-const prisma = new PrismaClient();
+import { registerUser } from '@/lib/auth-firebase';
 
 // Validatieschema voor gebruikersregistratie
 const userSchema = z.object({
@@ -37,74 +34,48 @@ export async function POST(req: NextRequest) {
     
     const { email, password, name, role, teamName, website, instagram } = validationResult.data;
 
-    // Controleer of gebruiker al bestaat
-    const existingUser = await prisma.user.findUnique({
-      where: {
-        email,
-      },
-    });
+    // Registreer gebruiker met Firebase
+    const result = await registerUser(email, password, name, role);
 
-    if (existingUser) {
+    if (!result.success) {
+      // Firebase geeft specifieke foutmeldingen terug die we kunnen controleren
+      if (result.error && result.error.includes('email-already-in-use')) {
+        return NextResponse.json(
+          { 
+            success: false, 
+            message: "Er bestaat al een gebruiker met dit e-mailadres" 
+          }, 
+          { status: 409 }
+        );
+      }
+      
       return NextResponse.json(
         { 
           success: false, 
-          message: "Er bestaat al een gebruiker met dit e-mailadres" 
+          message: result.error || 'Registratie mislukt' 
         }, 
-        { status: 409 }
+        { status: 400 }
       );
     }
 
-    // Hash het wachtwoord
-    const hashedPassword = await hash(password, 10);
+    // Update extra profielgegevens in Firebase (zoals teamNaam voor roeiers)
+    // Dit is nu al geïmplementeerd in registerUser functie, dus niets extra nodig hier
 
-    // Maak een nieuwe gebruiker aan
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        name,
-        role,
-      },
-    });
-
-    // Maak bijbehorend profiel aan afhankelijk van de rol
-    if (role === 'ROWER') {
-      await prisma.rower.create({
-        data: {
-          userId: user.id,
-          teamName,
-        },
-      });
-    } else if (role === 'PHOTOGRAPHER') {
-      await prisma.photographer.create({
-        data: {
-          userId: user.id,
-          website,
-          instagram,
-        },
-      });
-    }
-
-    // Gebruikersgegevens terugsturen (zonder wachtwoord)
+    // Gebruikersgegevens en token terugsturen
     return NextResponse.json(
       { 
         success: true, 
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          createdAt: user.createdAt,
-        } 
+        user: result.user,
+        token: result.token
       }, 
       { status: 201 }
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error("Registration error:", error);
     return NextResponse.json(
       { 
         success: false, 
-        message: "Er is een fout opgetreden bij het registreren" 
+        message: error.message || "Er is een fout opgetreden bij het registreren" 
       }, 
       { status: 500 }
     );
