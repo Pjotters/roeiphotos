@@ -199,7 +199,43 @@ export async function generateThumbnail(
 }
 
 // Foto's ophalen voor een fotograaf of evenement
-export async function getPhotos(filters: {
+export async function getPhotos(photographerId: string, limit?: number) {
+  // Overload functie om ook oude implementatie te ondersteunen
+  if (typeof photographerId === 'object') {
+    return getPhotosByFilters(photographerId);
+  }
+  
+  try {
+    // Bouw de query op basis van de filters
+    let photoQuery = collection(db, 'photos');
+    let q = query(photoQuery, where('photographerId', '==', photographerId));
+    
+    const querySnapshot = await getDocs(q);
+    const photos: any[] = [];
+    
+    querySnapshot.forEach((doc) => {
+      photos.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    // Sorteer op createdAt en beperk tot limit als die is opgegeven
+    const sortedPhotos = photos.sort((a, b) => {
+      const dateA = a.createdAt?.seconds || 0;
+      const dateB = b.createdAt?.seconds || 0;
+      return dateB - dateA; // Nieuwste eerst
+    }).slice(0, limit || photos.length);
+    
+    return sortedPhotos;
+  } catch (error: any) {
+    console.error('Get photos error:', error);
+    return [];
+  }
+}
+
+// Originele implementatie als private functie
+async function getPhotosByFilters(filters: {
   photographerId?: string;
   eventName?: string;
   isPublic?: boolean;

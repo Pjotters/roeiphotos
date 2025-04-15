@@ -4,9 +4,11 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  User
+  User,
+  deleteUser,
+  updateProfile
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, updateDoc, deleteDoc } from 'firebase/firestore';
 import { sign } from 'jsonwebtoken';
 
 // Type voor gebruikersrollen
@@ -20,6 +22,9 @@ interface UserData {
   role: UserRole;
   createdAt: any;
   updatedAt: any;
+  faceDescriptor?: any;
+  dataUseConsent?: boolean;
+  gdprConsent?: boolean;
 }
 
 // Gebruiker registreren in Firebase Authentication en Firestore
@@ -196,5 +201,58 @@ export async function checkAuthState() {
   } catch (error) {
     console.error('Check auth state error:', error);
     return { authenticated: false, user: null };
+  }
+}
+
+// Gebruikersprofielgegevens bijwerken
+export async function updateUserProfile(profileData: { 
+  name?: string;
+  dataUseConsent?: boolean;
+  gdprConsent?: boolean;
+}) {
+  try {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error('Geen ingelogde gebruiker gevonden');
+    }
+
+    // Update naam in Firebase Auth als deze is opgegeven
+    if (profileData.name) {
+      await updateProfile(currentUser, { displayName: profileData.name });
+    }
+
+    // Update Firestore gebruikersgegevens
+    const userDocRef = doc(db, 'users', currentUser.uid);
+    await updateDoc(userDocRef, {
+      ...profileData,
+      updatedAt: serverTimestamp()
+    });
+
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('Error updating user profile:', error);
+    return { success: false, error };
+  }
+}
+
+// Gebruikersaccount verwijderen
+export async function deleteUserAccount() {
+  try {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error('Geen ingelogde gebruiker gevonden');
+    }
+
+    // Verwijder eerst Firestore gegevens
+    const userDocRef = doc(db, 'users', currentUser.uid);
+    await deleteDoc(userDocRef);
+
+    // Verwijder daarna het Firebase Auth account
+    await deleteUser(currentUser);
+
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('Error deleting user account:', error);
+    return { success: false, error };
   }
 }

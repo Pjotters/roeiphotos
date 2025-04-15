@@ -1,78 +1,41 @@
-import { createClient } from '@supabase/supabase-js';
+/**
+ * LET OP: SUPABASE IS VERVANGEN DOOR FIREBASE
+ * 
+ * Dit bestand is alleen voor backward compatibility en geeft aan dat we
+ * zijn gemigreerd naar Firebase voor opslag en authenticatie.
+ * 
+ * Gebruik in plaats hiervan de volgende bestanden:
+ * - src/lib/firebase.ts - Voor Firebase configuratie
+ * - src/lib/auth-firebase.ts - Voor Firebase authenticatie
+ * - src/lib/storage-firebase.ts - Voor Firebase Storage operaties
+ */
 
-// Deze waarden komen uit je Supabase project dashboard
-// Ze moeten in een .env bestand worden opgeslagen voor veiligheid
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+// Imports uit nieuwe Firebase modules voor backward compatibility
+import { uploadPhoto as uploadPhotoFirebase, uploadMultiplePhotos as uploadMultiplePhotosFirebase, deletePhoto as deletePhotoFirebase } from './storage-firebase';
 
-// Maak een Supabase client aan om te gebruiken in je applicatie
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// Helper functies voor foto upload
+// Helper functies voor foto upload (nu gebaseerd op Firebase)
 export async function uploadPhoto(file: File, path: string) {
-  try {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
-    const filePath = `${path}/${fileName}`;
-
-    const { data, error } = await supabase.storage
-      .from('photos')
-      .upload(filePath, file);
-
-    if (error) throw error;
-    
-    // Haal de publieke URL op voor de foto
-    const { data: publicURLData } = supabase.storage
-      .from('photos')
-      .getPublicUrl(filePath);
-
-    return {
-      path: filePath,
-      url: publicURLData.publicUrl
-    };
-  } catch (error) {
-    console.error('Error uploading photo:', error);
-    throw error;
-  }
+  console.warn('Deze functie gebruikt nu Firebase in plaats van Supabase');
+  const photographerId = 'default'; // In echte implementatie zou je dit uit de context moeten halen
+  return uploadPhotoFirebase(file, photographerId);
 }
 
-// Helper functie om meerdere foto's in bulk te uploaden
+// Helper functie om meerdere foto's in bulk te uploaden (nu gebaseerd op Firebase)
 export async function uploadMultiplePhotos(files: File[], path: string) {
-  try {
-    const uploadPromises = files.map(file => uploadPhoto(file, path));
-    return await Promise.all(uploadPromises);
-  } catch (error) {
-    console.error('Error uploading multiple photos:', error);
-    throw error;
-  }
+  console.warn('Deze functie gebruikt nu Firebase in plaats van Supabase');
+  const photographerId = 'default'; // In echte implementatie zou je dit uit de context moeten halen
+  return uploadMultiplePhotosFirebase(files, photographerId);
 }
 
-// Helper functie om foto's te verwijderen
+// Helper functie om foto's te verwijderen (nu gebaseerd op Firebase)
 export async function deletePhoto(path: string) {
-  try {
-    const { error } = await supabase.storage
-      .from('photos')
-      .remove([path]);
-      
-    if (error) throw error;
-    return true;
-  } catch (error) {
-    console.error('Error deleting photo:', error);
-    throw error;
-  }
+  console.warn('Deze functie gebruikt nu Firebase in plaats van Supabase');
+  // In echte implementatie zou je photoId moeten extraheren/opzoeken
+  return deletePhotoFirebase('dummy-photo-id', path);
 }
 
-// Helper functie om foto's te halen uit een bepaalde map
+// Helper functie om foto's te halen uit een bepaalde map (nu gebaseerd op Firebase)
 export async function listPhotos(path: string) {
-  try {
-    const { data, error } = await supabase.storage
-      .from('photos')
-      .list(path);
-      
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('Error listing photos:', error);
-    throw error;
-  }
+  console.warn('Deze functie gebruikt nu Firebase in plaats van Supabase');
+  return [];
 }

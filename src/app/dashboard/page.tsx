@@ -3,26 +3,58 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/components/FirebaseAuthProvider';
+import { getPhotos, getPhotoStatistics } from '@/lib/storage-firebase';
+import { getFaceMatches } from '@/lib/face-recognition-firebase';
 
-type UserRole = 'ROWER' | 'PHOTOGRAPHER' | 'ADMIN' | null;
+type UserRole = 'ROWER' | 'PHOTOGRAPHER' | 'ADMIN';
 
 export default function Dashboard() {
-  // In een echte implementatie zou je de gebruikersrol uit een auth context halen
-  const [userRole, setUserRole] = useState<UserRole>(null);
+  const router = useRouter();
+  const { user, userData, loading: authLoading } = useAuth();
+  const [photoStats, setPhotoStats] = useState<any>(null);
+  const [faceMatches, setFaceMatches] = useState<any[]>([]);
+  const [photos, setPhotos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Dit is een tijdelijke simulatie van het ophalen van gebruikersgegevens
+  // Redirect naar login als de gebruiker niet is ingelogd
   useEffect(() => {
-    // Simuleer API-call om gebruikersgegevens op te halen
-    setTimeout(() => {
-      // Voor testdoeleinden kunnen we tussen rollen wisselen
-      // In een echte implementatie zou dit van de ingelogde gebruiker komen
-      setUserRole('ROWER'); // of 'PHOTOGRAPHER' of 'ADMIN'
-      setLoading(false);
-    }, 800);
-  }, []);
+    if (!authLoading && !user) {
+      router.push('/auth/login');
+    }
+  }, [user, authLoading, router]);
 
-  if (loading) {
+  // Haal relevante data op gebaseerd op de gebruikersrol
+  useEffect(() => {
+    if (!userData) return;
+
+    const fetchData = async () => {
+      try {
+        if (userData.role === 'PHOTOGRAPHER') {
+          // Haal fotografendata op
+          const stats = await getPhotoStatistics(user?.uid || '');
+          const recentPhotos = await getPhotos(user?.uid || '', 5);
+          setPhotoStats(stats);
+          setPhotos(recentPhotos);
+        } else if (userData.role === 'ROWER') {
+          // Haal roeiersdata op
+          const matches = await getFaceMatches(user?.uid || '');
+          setFaceMatches(matches);
+        }
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+        setLoading(false);
+      }
+    };
+
+    if (userData) {
+      fetchData();
+    }
+  }, [userData, user]);
+
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -32,6 +64,11 @@ export default function Dashboard() {
       </div>
     );
   }
+  
+  // Als er geen gebruiker is, toon dan niets (de redirect zal plaatsvinden)
+  if (!userData) {
+    return null;
+  }
 
   return (
     <div className="bg-gray-50 min-h-screen">
@@ -40,10 +77,10 @@ export default function Dashboard() {
         <div className="bg-white rounded-lg shadow-sm overflow-hidden mb-8">
           <div className="px-4 py-5 sm:p-6">
             <h1 className="text-2xl font-bold text-gray-900">
-              Welkom bij je RoeiFoto's Dashboard
+              Welkom {userData.name} bij je RoeiFoto's Dashboard
             </h1>
             <p className="mt-1 text-sm text-gray-500">
-              {userRole === 'ROWER' ? 
+              {userData.role === 'ROWER' ? 
                 'Bekijk hier je matches, foto\'s en instellingen als roeier.' : 
                 'Beheer hier je geüploade foto\'s en instellingen als fotograaf.'}
             </p>
@@ -63,7 +100,7 @@ export default function Dashboard() {
   );
 }
 
-function RowerDashboard() {
+function RowerDashboard({ faceMatches, userId }: { faceMatches: any[], userId: string }) {
   // Dummy data voor het dashboard van roeiers
   const recentMatches = [
     { id: '1', eventName: 'Hollandia Roeiwedstrijden', date: '12 apr 2025', matches: 8 },
@@ -225,7 +262,7 @@ function RowerDashboard() {
   );
 }
 
-function PhotographerDashboard() {
+function PhotographerDashboard({ photos, stats, userId }: { photos: any[], stats: any, userId: string }) {
   // Dummy data voor het dashboard van fotografen
   const recentUploads = [
     { id: '1', eventName: 'Hollandia Roeiwedstrijden', date: '12 apr 2025', photos: 124, views: 356 },
